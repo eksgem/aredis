@@ -268,7 +268,7 @@ uint16_t crcspeed16native(uint16_t table[8][256], uint16_t crc, void *buf,
 /* Initialize CRC lookup table in architecture-dependent manner. */
 void crcspeed64native_init(crcfn64 fn, uint64_t table[8][256]) {
     uint64_t n = 1;
-
+    // 小端序，LSB在低地址
     *(char *)&n ? crcspeed64little_init(fn, table)
                 : crcspeed64big_init(fn, table);
 }

@@ -38,6 +38,7 @@
 }
 
 static char error[1044];
+//出错时候的位置
 static off_t epos;
 
 int consumeNewline(char *buf) {
@@ -59,6 +60,7 @@ int readLong(FILE *fp, char prefix, long *target) {
         return 0;
     }
     *target = strtol(buf+1,&eptr,10);
+    //也就是说如果eptr的前两个字符不是'\r','\n'，那么表示格式不对。这样正确的格式应该是prefix+数字字符串+'\r''\n'， 如"*123\r\n"。
     return consumeNewline(eptr);
 }
 
@@ -76,6 +78,7 @@ int readBytes(FILE *fp, char *target, long length) {
 int readString(FILE *fp, char** target) {
     long len;
     *target = NULL;
+    // '$'表明后面是字符串长度。同样字符串也是以"\r\n"结尾。
     if (!readLong(fp,'$',&len)) {
         return 0;
     }
@@ -94,6 +97,7 @@ int readString(FILE *fp, char** target) {
 }
 
 int readArgc(FILE *fp, long *target) {
+    // *表示命令和参数的个数
     return readLong(fp,'*',target);
 }
 
@@ -102,7 +106,9 @@ off_t process(FILE *fp) {
     off_t pos = 0;
     int i, multi = 0;
     char *str;
-
+    // 该函数不执行命令，只是简单检查文件格式。
+    // 从代码来看，格式应该为
+    // "*3\r\n""$3SET""$1a\r\n""$4test\r\n" 这样代表SET a test命令。
     while(1) {
         if (!multi) pos = ftello(fp);
         if (!readArgc(fp, &argc)) break;
@@ -110,12 +116,14 @@ off_t process(FILE *fp) {
         for (i = 0; i < argc; i++) {
             if (!readString(fp,&str)) break;
             if (i == 0) {
+                // multi不能嵌套
                 if (strcasecmp(str, "multi") == 0) {
                     if (multi++) {
                         ERROR("Unexpected MULTI");
                         break;
                     }
                 } else if (strcasecmp(str, "exec") == 0) {
+                    // exec必须有一个对应multi
                     if (--multi) {
                         ERROR("Unexpected EXEC");
                         break;
@@ -190,6 +198,7 @@ int redis_check_aof_main(int argc, char **argv) {
         if (has_preamble) {
             printf("The AOF appears to start with an RDB preamble.\n"
                    "Checking the RDB preamble to start:\n");
+            //能这样处理是因为RDB文件有个专门的标记RDB_OPCODE_EOF来标记RDB结束，而不是真的到文件结尾。
             if (redis_check_rdb_main(argc,argv,fp) == C_ERR) {
                 printf("RDB preamble of AOF file is not sane, aborting.\n");
                 exit(1);
@@ -205,6 +214,7 @@ int redis_check_aof_main(int argc, char **argv) {
         (long long) size, (long long) pos, (long long) diff);
     if (diff > 0) {
         if (fix) {
+            //丢弃掉最后的未完成事务。
             char buf[2];
             printf("This will shrink the AOF from %lld bytes, with %lld bytes, to %lld bytes\n",(long long)size,(long long)diff,(long long)pos);
             printf("Continue? [y/N]: ");

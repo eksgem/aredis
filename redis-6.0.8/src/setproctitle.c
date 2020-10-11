@@ -25,6 +25,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  * ==========================================================================
  */
+// 见https://github.com/antirez/redis/commit/6356cf6808be9ea88ab97be33ebf1576eeb57da6
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -82,7 +83,7 @@ static inline size_t spt_min(size_t a, size_t b) {
  */
 static int spt_clearenv(void) {
 #if __GLIBC__
-	clearenv();
+	clearenv(); // 清除所有的环境变量名值对，并将外部变量environ设置为NULL.并没有释放环境变量占用的内存。在重新设置进程名的时候才释放。
 
 	return 0;
 #else
@@ -99,7 +100,7 @@ static int spt_clearenv(void) {
 #endif
 } /* spt_clearenv() */
 
-
+// 重新设置环境变量
 static int spt_copyenv(char *oldenv[]) {
 	extern char **environ;
 	char *eq;
@@ -130,7 +131,7 @@ error:
 	return error;
 } /* spt_copyenv() */
 
-
+// 复制argv，复制后的argv不再是连续存储的。
 static int spt_copyargs(int argc, char *argv[]) {
 	char *tmp;
 	int i;
@@ -148,25 +149,25 @@ static int spt_copyargs(int argc, char *argv[]) {
 	return 0;
 } /* spt_copyargs() */
 
-
+//以下这些处理的原因是argv和environ都是字符串的数组，并且最后一个元素为NULL。另外argv和environ在内存中是连续存储的。
 void spt_init(int argc, char *argv[]) {
         char **envp = environ;
 	char *base, *end, *nul, *tmp;
 	int i, error;
-
+	//base为原始的argv[0]的地址。
 	if (!(base = argv[0]))
 		return;
-
+	// nul为argv[0](字符串)的null的地址。
 	nul = &base[strlen(base)];
 	end = nul + 1;
-
+	// 找到argv的结尾，这里的代码感觉过分复杂了，因为argv[argc]是NULL，先略过
 	for (i = 0; i < argc || (i >= argc && argv[i]); i++) {
-		if (!argv[i] || argv[i] < end)
+		if (!argv[i] || argv[i] < end) //i为0的时候跳过
 			continue;
 
 		end = argv[i] + strlen(argv[i]) + 1;
 	}
-
+	//最终end的environ的结尾NULL的位置。
 	for (i = 0; envp[i]; i++) {
 		if (envp[i] < end)
 			continue;
@@ -178,6 +179,8 @@ void spt_init(int argc, char *argv[]) {
 		goto syerr;
 
 #if __GLIBC__
+	// program_invocation_name和program_invocation_short_name定义在errno.h中。
+	// 从测试结果来看，program_invocation_name就是argv[0],而program_invocation_short_name是argv[0]的一部分。
 	if (!(tmp = strdup(program_invocation_name)))
 		goto syerr;
 

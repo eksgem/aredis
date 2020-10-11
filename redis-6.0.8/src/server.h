@@ -448,6 +448,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
  * The actual resolution depends on server.hz. */
+//如果需要的执行时间小于每次执行的分片时间或者总的执行次数超过了超过了执行需要的时间分片数
+//也就是说实现的是多大间隔执行一次，大概是每_ms_执行一次；而不是每次执行需要多少时间。
 #define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
 
 /* We can print the stacktrace, so our assert is defined this way: */
@@ -655,6 +657,7 @@ typedef struct clientReplyBlock {
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
+// 表明数据管理是以db为单位的，键空间也是在不同的db中。可以对db进行单独操作，比如flushdb。
 typedef struct redisDb {
     dict *dict;                 /* The keyspace for this DB */
     dict *expires;              /* Timeout of keys with a timeout set */
@@ -750,6 +753,7 @@ typedef struct readyList {
                                            no AUTH is needed, and every
                                            connection is immediately
                                            authenticated. */
+// 用户名密码是认证。控制用户能访问的key和能使用的命令，像功能权限和数据权限的概念,这是授权。
 typedef struct {
     sds name;       /* The username as an SDS string. */
     uint64_t flags; /* See USER_FLAG_* */
@@ -782,6 +786,8 @@ typedef struct {
                                       need more reserved IDs use UINT64_MAX-1,
                                       -2, ... and so forth. */
 
+// conn为NULL表示一个非连接客户端。
+// 该数据结构是有状态的，用来实现pipeline，事务等能力。
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
     connection *conn;

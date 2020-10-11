@@ -55,17 +55,18 @@ static int is_leap_year(time_t year) {
     else if (year % 400) return 0;  /* If div by 100 *and* not by 400 is not leap. */
     else return 1;                  /* If div by 100 and 400 is leap. */
 }
-
+// 该函数用来填充需要使用当地时间显示的tm。例如当前时间是第几周之类的。
 void nolocks_localtime(struct tm *tmp, time_t t, time_t tz, int dst) {
     const time_t secs_min = 60;
     const time_t secs_hour = 3600;
     const time_t secs_day = 3600*24;
-
+    // 对于东8区来说，0点相当于是UTC的8点，所以为了得到东8区的时间，应该timestamp上减去8*3600秒。
+    // 对于夏令时，8点相当于是实际的9点，所以应该加上3600*dst。
     t -= tz;                            /* Adjust for timezone. */
     t += 3600*dst;                      /* Adjust for daylight time. */
     time_t days = t / secs_day;         /* Days passed since epoch. */
     time_t seconds = t % secs_day;      /* Remaining seconds. */
-
+    //通过秒数就可以确定hour，min和sec。
     tmp->tm_isdst = dst;
     tmp->tm_hour = seconds / secs_hour;
     tmp->tm_min = (seconds % secs_hour) / secs_min;

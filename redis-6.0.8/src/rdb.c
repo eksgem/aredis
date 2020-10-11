@@ -191,6 +191,7 @@ int rdbLoadLenByRef(rio *rdb, int *isencoded, uint64_t *lenptr) {
 
     if (isencoded) *isencoded = 0;
     if (rioRead(rdb,buf,1) == 0) return -1;
+    //对于长度较短的对象，长度和类型编码在一个字节内。较长的对象需要的字节数超过一个。
     type = (buf[0]&0xC0)>>6;
     if (type == RDB_ENCVAL) {
         /* Read a 6 bit encoding type. */
@@ -279,7 +280,7 @@ void *rdbLoadIntegerObject(rio *rdb, int enctype, int flags, size_t *lenptr) {
     } else if (enctype == RDB_ENC_INT32) {
         uint32_t v;
         if (rioRead(rdb,enc,4) == 0) return NULL;
-        v = enc[0]|(enc[1]<<8)|(enc[2]<<16)|(enc[3]<<24);
+        v = enc[0]|(enc[1]<<8)|(enc[2]<<16)|(enc[3]<<24); //低地址存的是低位，表明是按照小端序存储 
         val = (int32_t)v;
     } else {
         rdbExitReportCorruptRDB("Unknown RDB integer encoding type %d",enctype);
@@ -517,6 +518,7 @@ void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr) {
         }
         return buf;
     } else {
+        // 创建一个未初始化的字符串对象，SDS_NOINIT是一个特殊常量，表明创建的字符串对象不需要初始化。
         robj *o = encode ? createStringObject(SDS_NOINIT,len) :
                            createRawStringObject(SDS_NOINIT,len);
         if (len && rioRead(rdb,o->ptr,len) == 0) {
@@ -1465,10 +1467,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
 
     if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
+        //字符串存储的就是字符串对象的长度及字符串的数据。
         if ((o = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
         o = tryObjectEncoding(o);
     } else if (rdbtype == RDB_TYPE_LIST) {
         /* Read list value */
+        //列表是先存储列表的长度
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
 
         o = createQuicklistObject();
@@ -1477,6 +1481,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
 
         /* Load every single element of the list */
         while(len--) {
+            // 列表的元素只能是字符串对象。
             if ((ele = rdbLoadEncodedStringObject(rdb)) == NULL) {
                 decrRefCount(o);
                 return NULL;
@@ -1489,6 +1494,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
         }
     } else if (rdbtype == RDB_TYPE_SET) {
         /* Read Set value */
+        //集合是先存储集合对象数量
         if ((len = rdbLoadLen(rdb,NULL)) == RDB_LENERR) return NULL;
 
         /* Use a regular set when there are too many entries. */
@@ -1501,7 +1507,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
         } else {
             o = createIntsetObject();
         }
-
+        // 集合的元素只能是字符串。
         /* Load every single element of the set */
         for (i = 0; i < len; i++) {
             long long llval;
@@ -1544,6 +1550,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
             dictExpand(zs->dict,zsetlen);
 
         /* Load every single element of the sorted set. */
+        // zset的每个元素是一个字符串+一个double分值
         while(zsetlen--) {
             sds sdsele;
             double score;
@@ -1588,7 +1595,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
         if (len == RDB_LENERR) return NULL;
 
         o = createHashObject();
-
+        //hash表的每个元素是 一个字符串key+一个字符串值这样存储。
         /* Too many entries? Use a hash table. */
         if (len > server.hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
@@ -1673,6 +1680,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key) {
                rdbtype == RDB_TYPE_ZSET_ZIPLIST ||
                rdbtype == RDB_TYPE_HASH_ZIPLIST)
     {
+        //这些压缩形式的集合，是作为一个字符串存储的
         unsigned char *encoded =
             rdbGenericLoadStringObject(rdb,RDB_LOAD_PLAIN,NULL);
         if (encoded == NULL) return NULL;
@@ -2014,6 +2022,7 @@ void startLoading(size_t size, int rdbflags) {
  * 'filename' is optional and used for rdb-check on error */
 void startLoadingFile(FILE *fp, char* filename, int rdbflags) {
     struct stat sb;
+    // 获取rdb文件大小等信息
     if (fstat(fileno(fp), &sb) == -1)
         sb.st_size = 0;
     rdbFileBeingLoaded = filename;
@@ -2114,6 +2123,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         robj *val;
 
         /* Read type. */
+        // 数据类型是一个单字节的无符号整数。
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
         /* Handle special types. */
@@ -2457,9 +2467,11 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
 /* When a background RDB saving/transfer terminates, call the right handler. */
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     switch(server.rdb_child_type) {
+    //RDB存储在本地文件
     case RDB_CHILD_TYPE_DISK:
         backgroundSaveDoneHandlerDisk(exitcode,bysignal);
         break;
+    //RDB通过socket存储在slave中
     case RDB_CHILD_TYPE_SOCKET:
         backgroundSaveDoneHandlerSocket(exitcode,bysignal);
         break;

@@ -381,6 +381,7 @@ void loadServerConfigFromString(char *config) {
         sdstolower(argv[0]);
 
         /* Iterate the configs that are standard */
+        // 对于标准设置，不再挨个进行if判断，而是在这里进行了统一处理。
         int match = 0;
         for (standardConfig *config = configs; config->name != NULL; config++) {
             if ((!strcasecmp(argv[0],config->name) ||
@@ -458,6 +459,7 @@ void loadServerConfigFromString(char *config) {
                 fclose(logfp);
             }
         } else if (!strcasecmp(argv[0],"include") && argc == 2) {
+            // redis配置文件可以使用include包含其他配置文件
             loadServerConfig(argv[1],NULL);
         } else if ((!strcasecmp(argv[0],"client-query-buffer-limit")) && argc == 2) {
              server.client_max_querybuf_len = memtoll(argv[1],NULL);
@@ -565,6 +567,7 @@ void loadServerConfigFromString(char *config) {
                     err = "sentinel directive while not in sentinel mode";
                     goto loaderr;
                 }
+                // sentinel相关配置
                 err = sentinelHandleConfiguration(argv+1,argc-1);
                 if (err) goto loaderr;
             }
@@ -575,6 +578,7 @@ void loadServerConfigFromString(char *config) {
     }
 
     /* Sanity checks. */
+    // 使用server.masterhost来判断是否是从节点，但是在集群模式下，主从可能切换。
     if (server.cluster_enabled && server.masterhost) {
         linenum = slaveof_linenum;
         i = linenum-1;
@@ -608,7 +612,7 @@ void loadServerConfig(char *filename, char *options) {
     /* Load the file content */
     if (filename) {
         FILE *fp;
-
+        //输入文件可以是标准输入 
         if (filename[0] == '-' && filename[1] == '\0') {
             fp = stdin;
         } else {
@@ -619,6 +623,7 @@ void loadServerConfig(char *filename, char *options) {
                 exit(1);
             }
         }
+        //fgets会将\n包含在内
         while(fgets(buf,CONFIG_MAX_LINE+1,fp) != NULL)
             config = sdscat(config,buf);
         if (fp != stdin) fclose(fp);
@@ -2266,6 +2271,7 @@ standardConfig configs[] = {
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
     createStringConfig("unixsocket", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.unixsocket, NULL, NULL, NULL),
+    // 默认/var/run/redis.pid,如果一台机器上启动多个redis，应该设置不同的值。
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.slave_announce_ip, NULL, NULL, NULL),
     createStringConfig("masteruser", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.masteruser, NULL, NULL, NULL),
@@ -2341,6 +2347,8 @@ standardConfig configs[] = {
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
 
     /* Size_t configs */
+    //要使用ziplist来代替hash要满足两个条件 
+    //1.项的数量不能超过hash-max-ziplist-entries(默认512),并且key或value的大小不能超过hash-max-ziplist-value(默认64)
     createSizeTConfig("hash-max-ziplist-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hash_max_ziplist_entries, 512, INTEGER_CONFIG, NULL, NULL),
     createSizeTConfig("set-max-intset-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.set_max_intset_entries, 512, INTEGER_CONFIG, NULL, NULL),
     createSizeTConfig("zset-max-ziplist-entries", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.zset_max_ziplist_entries, 128, INTEGER_CONFIG, NULL, NULL),

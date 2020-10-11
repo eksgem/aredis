@@ -54,7 +54,7 @@ int checkBlockedClientTimeout(client *c, mstime_t now) {
  * each iteration would be costly without any actual gain. */
 int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
     time_t now = now_ms/1000;
-
+    //如果设置了server.maxidletime(默认为0)，并且client不是slave，master，阻塞式命令，pub/sub客户端，并且超过了server.maxidletime没有活动，则清理该client。
     if (server.maxidletime &&
         /* This handles the idle clients connection timeout if set. */
         !(c->flags & CLIENT_SLAVE) &&   /* No timeout for slaves and monitors */

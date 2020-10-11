@@ -36,6 +36,7 @@ typedef struct aeApiState {
     struct epoll_event *events;
 } aeApiState;
 
+// 创建epoll实例和初始化相关数据结构
 static int aeApiCreate(aeEventLoop *eventLoop) {
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
@@ -108,7 +109,8 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
 static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     aeApiState *state = eventLoop->apidata;
     int retval, numevents = 0;
-
+    // 也就是说eventLoop->apidata->events中放的是触发的epoll_event
+    // eventLoop->fired中放的是经过处理的aeFiredEvent。
     retval = epoll_wait(state->epfd,state->events,eventLoop->setsize,
             tvp ? (tvp->tv_sec*1000 + tvp->tv_usec/1000) : -1);
     if (retval > 0) {

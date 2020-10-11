@@ -713,6 +713,7 @@ REDISMODULE_API int (*RedisModule_DeauthenticateAndCloseClient)(RedisModuleCtx *
 /* This is included inline inside each Redis module. */
 static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int apiver) REDISMODULE_ATTR_UNUSED;
 static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver, int apiver) {
+    // 不知道为什么使用这种方式转换，而不是使用成员变量。
     void *getapifuncptr = ((void**)ctx)[0];
     RedisModule_GetApi = (int (*)(const char *, void *)) (unsigned long)getapifuncptr;
     REDISMODULE_GET_API(Alloc);

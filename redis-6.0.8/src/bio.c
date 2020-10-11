@@ -171,11 +171,13 @@ void *bioProcessBackgroundJobs(void *arg) {
     /* Make the thread killable at any time, so that bioKillThreads()
      * can work reliably. */
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    // 立即响应取消请求
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
     pthread_mutex_lock(&bio_mutex[type]);
     /* Block SIGALRM so we are sure that only the main thread will
      * receive the watchdog signal. */
+    // 这是因为指向进程的信号可以发送给该进程下没有阻塞该信号的任一线程。所以在所有子线程中将该信号阻塞，可以保证只有主线程收到信号
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGALRM);
     if (pthread_sigmask(SIG_BLOCK, &sigset, NULL))
@@ -186,6 +188,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         listNode *ln;
 
         /* The loop always starts with the lock hold. */
+        // 对该条件等待来说，其谓词就是listLength(bio_jobs[type]) != 0
         if (listLength(bio_jobs[type]) == 0) {
             pthread_cond_wait(&bio_newjob_cond[type],&bio_mutex[type]);
             continue;

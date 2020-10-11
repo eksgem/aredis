@@ -46,26 +46,19 @@
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
-#ifdef HAVE_EVPORT
-#include "ae_evport.c"
-#else
-    #ifdef HAVE_EPOLL
-    #include "ae_epoll.c"
-    #else
-        #ifdef HAVE_KQUEUE
-        #include "ae_kqueue.c"
-        #else
-        #include "ae_select.c"
-        #endif
-    #endif
-#endif
+// 在linux应该是epoll，重点关注epoll。
+#include "ae_epoll.c"
+
 
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
 
     if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
+    // 这些事件集合大小都和maxclient有关，事件对应的fd就是其数组索引。
+    // 监听的事件，索引即为监听的文件描述符
     eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
+    // 发送的事件
     eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
@@ -77,6 +70,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->beforesleep = NULL;
     eventLoop->aftersleep = NULL;
     eventLoop->flags = 0;
+    //创建epoll实例和初始化相关数据结构
     if (aeApiCreate(eventLoop) == -1) goto err;
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
@@ -399,7 +393,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         int j;
         aeTimeEvent *shortest = NULL;
         struct timeval tv, *tvp;
-
+        //为了防止CPU使用过高，在处理文件事件前，会先获取最近要执行的的时间事件的时间。
+        //在epoll_wait的时候会加上这个过期时间，这样如果这段时间内没有文件事件，就会阻塞一小段时间。
         if (flags & AE_TIME_EVENTS && !(flags & AE_DONT_WAIT))
             shortest = aeSearchNearestTimer(eventLoop);
         if (shortest) {
@@ -451,6 +446,9 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             eventLoop->aftersleep(eventLoop);
 
         for (j = 0; j < numevents; j++) {
+            // eventLoop->events中放的是，accept连接后创建的aeFileEvent。
+            // 该事件包含了请求处理函数。
+            // 因为fd在分配的时候是使用最小可用的fd，所以不会超过之前根据maxClients来设置的数组大小。
             aeFileEvent *fe = &eventLoop->events[eventLoop->fired[j].fd];
             int mask = eventLoop->fired[j].mask;
             int fd = eventLoop->fired[j].fd;

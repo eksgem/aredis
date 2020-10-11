@@ -963,17 +963,20 @@ sds *sdssplitargs(const char *line, int *argc) {
 
     *argc = 0;
     while(1) {
-        /* skip blanks */
+        /* skip blanks 跳过了选项之间的空白字符，在双引号和单引号之间的空白字符会保留*/
         while(*p && isspace(*p)) p++;
         if (*p) {
             /* get a token */
             int inq=0;  /* set to 1 if we are in "quotes" */
             int insq=0; /* set to 1 if we are in 'single quotes' */
-            int done=0;
+            int done=0; //done用来指示是否找到了一个合法的选项
 
             if (current == NULL) current = sdsempty();
             while(!done) {
                 if (inq) {
+                    //在双引号中，转义起作用
+                    //不用担心越界，因为字符串是以'\0'结尾的。
+                    //处理16进制数字
                     if (*p == '\\' && *(p+1) == 'x' &&
                                              is_hex_digit(*(p+2)) &&
                                              is_hex_digit(*(p+3)))
@@ -984,7 +987,7 @@ sds *sdssplitargs(const char *line, int *argc) {
                                 hex_digit_to_int(*(p+3));
                         current = sdscatlen(current,(char*)&byte,1);
                         p += 3;
-                    } else if (*p == '\\' && *(p+1)) {
+                    } else if (*p == '\\' && *(p+1)) { //处理转义
                         char c;
 
                         p++;
@@ -1008,7 +1011,7 @@ sds *sdssplitargs(const char *line, int *argc) {
                     } else {
                         current = sdscatlen(current,p,1);
                     }
-                } else if (insq) {
+                } else if (insq) { //在单引号中，只有\'为转义字符。
                     if (*p == '\\' && *(p+1) == '\'') {
                         p++;
                         current = sdscatlen(current,"'",1);
@@ -1023,7 +1026,7 @@ sds *sdssplitargs(const char *line, int *argc) {
                     } else {
                         current = sdscatlen(current,p,1);
                     }
-                } else {
+                } else { //不在双引号和单引号中
                     switch(*p) {
                     case ' ':
                     case '\n':

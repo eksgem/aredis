@@ -191,7 +191,7 @@ void activeExpireCycle(int type) {
      * existing inside the database. */
     long total_sampled = 0;
     long total_expired = 0;
-
+    //也就是说每个db，每次最少尝试20个设置了expire的随机key，如果其中有超过5个的过期键，那么就继续循环，再重试20个，直到达到条件或者超时。
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
         /* Expired and checked in a single loop. */
         unsigned long expired, sampled;

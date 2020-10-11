@@ -128,12 +128,14 @@ typedef struct raxNode {
      * in the representation above as "value-ptr" field).
      */
     unsigned char data[];
+    //子节点的指针是存放在data后面的，这也是为什么分配内存的时候需要计算padding。因为下一个元素的地址必须为该元素的大小的整数倍，在这里用的是sizeof(void *)
+    //子节点指针后面是值指针(如果有的话)
 } raxNode;
 
 typedef struct rax {
     raxNode *head;
-    uint64_t numele;
-    uint64_t numnodes;
+    uint64_t numele; //元素数，也就是key的格式
+    uint64_t numnodes; //节点数
 } rax;
 
 /* Stack data structure used by raxLowWalk() in order to, optionally, return

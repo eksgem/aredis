@@ -63,7 +63,7 @@ struct _rio {
 
     /* maximum single read or write chunk size */
     size_t max_processing_chunk;
-
+    // RIO可以用于不同的后端设备
     /* Backend-specific vars. */
     union {
         /* In-memory buffer target. */
@@ -119,11 +119,14 @@ static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
 static inline size_t rioRead(rio *r, void *buf, size_t len) {
     if (r->flags & RIO_FLAG_READ_ERROR) return 0;
     while (len) {
+        // 如果设置了max_processing_chunk，则每次读取不能超过max_processing_chunk。
         size_t bytes_to_read = (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
+        // 这里read根据不同后端设备会使用不同的函数。
         if (r->read(r,buf,bytes_to_read) == 0) {
             r->flags |= RIO_FLAG_READ_ERROR;
             return 0;
         }
+        // 后端为文件，update_cksum为NULL。
         if (r->update_cksum) r->update_cksum(r,buf,bytes_to_read);
         buf = (char*)buf + bytes_to_read;
         len -= bytes_to_read;

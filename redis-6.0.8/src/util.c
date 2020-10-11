@@ -636,6 +636,7 @@ void getRandomBytes(unsigned char *p, size_t len) {
                 struct timeval tv;
                 gettimeofday(&tv,NULL);
                 pid_t pid = getpid();
+                //seed里面所有的字符很可能是一样的，因为在这么短的循环里，时间很可能是一样的，感觉应该结合随机数来实现
                 seed[j] = tv.tv_sec ^ tv.tv_usec ^ pid ^ (long)fp;
             }
         } else {

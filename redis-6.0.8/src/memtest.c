@@ -62,7 +62,7 @@ size_t progress_full; /* How many chars to write to fill the progress bar. */
 
 void memtest_progress_start(char *title, int pass) {
     int j;
-
+    // 一些特殊字符可以作为控制字符
     printf("\x1b[H\x1b[2J");    /* Cursor home, clear screen. */
     /* Fill with dots. */
     for (j = 0; j < ws.ws_col*(ws.ws_row-2); j++) printf(".");

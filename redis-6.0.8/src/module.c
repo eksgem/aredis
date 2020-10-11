@@ -7349,10 +7349,11 @@ dictType moduleAPIDictType = {
     NULL                       /* val destructor */
 };
 
+// 注意这里传递的并不是某一具体类型的函数指针，而是void*，因为每个函数的签名都不一样。
 int moduleRegisterApi(const char *funcname, void *funcptr) {
     return dictAdd(server.moduleapi, (char*)funcname, funcptr);
 }
-
+// 这里不知道为什么要先强制转换成unsigned long，再转成void *。直接转或者不转应该都可以。
 #define REGISTER_API(name) \
     moduleRegisterApi("RedisModule_" #name, (void *)(unsigned long)RM_ ## name)
 
@@ -7366,14 +7367,16 @@ void moduleInitModulesSystem(void) {
 
     /* Set up the keyspace notification susbscriber list and static client */
     moduleKeyspaceSubscribers = listCreate();
+    // 创建一个非连接的客户端
     moduleFreeContextReusedClient = createClient(NULL);
     moduleFreeContextReusedClient->flags |= CLIENT_MODULE;
     moduleFreeContextReusedClient->user = NULL; /* root user. */
 
     /* Set up filter list */
     moduleCommandFilters = listCreate();
-
+    // 注册暴露给模块的核心API。
     moduleRegisterCoreAPI();
+    // 为模块系统创建一个管道用于消息通知。
     if (pipe(server.module_blocked_pipe) == -1) {
         serverLog(LL_WARNING,
             "Can't create the pipe for module blocking commands: %s",
@@ -7813,11 +7816,15 @@ int RM_ModuleTypeReplaceValue(RedisModuleKey *key, moduleType *mt, void *new_val
 }
 
 /* Register all the APIs we export. Keep this function at the end of the
- * file so that's easy to seek it to add new entries. */
+ * file so that's easy to seek it to add new entries. 
+ * 这些函数是暴露给模块的函数。并不是直接包含在头文件中由模块直接调用。而是采用这种注册名称的方式，内部的实现可以变化。也可以说暴露的是API而不是实现
+ * 另外，redis内部很多方法模块也可以直接使用，比如通过包含redis相关头文件的方式，不过这样实际相当于直接操作redis了。
+ * 会抵消使用模块带来的独立性的好处 */
 void moduleRegisterCoreAPI(void) {
     server.moduleapi = dictCreate(&moduleAPIDictType,NULL);
     server.sharedapi = dictCreate(&moduleAPIDictType,NULL);
-    REGISTER_API(Alloc);
+    // 注册API最终是将API的名称作为key，函数指针作为值加到server.moduleapi这个字典中。
+    REGISTER_API(Alloc); // 会变成moduleRegisterApi("RedisModule_Alloc", (void *)(unsigned long)RM_Alloc);
     REGISTER_API(Calloc);
     REGISTER_API(Realloc);
     REGISTER_API(Free);

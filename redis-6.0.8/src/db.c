@@ -215,6 +215,9 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->dict,key->ptr);
 
     serverAssertWithInfo(NULL,key,de != NULL);
+    //注意这里只是一个赋值auxentry的值为*de,并不代表&auxentry为de，因为&auxentry为auxentry变量的地址和其值无关。
+    //结构体赋值为复制原结构体的所有字段，所以auxentry是原先的entry。
+    //其实对于普通引用也是一样的，如int c = *ip;这样并不会将c和ip进行绑定，而只是赋值。
     dictEntry auxentry = *de;
     robj *old = dictGetVal(de);
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {

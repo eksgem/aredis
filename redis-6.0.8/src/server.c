@@ -1047,7 +1047,7 @@ void serverLogRaw(int level, const char *msg) {
 
         gettimeofday(&tv,NULL);
         struct tm tm;
-        nolocks_localtime(&tm,tv.tv_sec,server.timezone,server.daylight_active);
+        nolocks_localtime(&tm,tv.tv_sec,server.timezone,server.daylight_active); //无锁版的localtime
         off = strftime(buf,sizeof(buf),"%d %b %Y %H:%M:%S.",&tm);
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
         if (server.sentinel_mode) {
@@ -1073,6 +1073,7 @@ void serverLog(int level, const char *fmt, ...) {
     va_list ap;
     char msg[LOG_MAX_LEN];
 
+    //这里使用&是因为高位还有一个位用来表示是否是raw模式
     if ((level&0xff) < server.verbosity) return;
 
     va_start(ap, fmt);
@@ -1577,6 +1578,7 @@ size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS];
 int clientsCronTrackExpansiveClients(client *c) {
     size_t in_usage = sdsAllocSize(c->querybuf);
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
+    //因为server.unixtime不是每次都取当前时间，所以这里可以保证一小段时间内，记录都在这一个slot内。而不是每次都是一个新的槽。
     int i = server.unixtime % CLIENTS_PEAK_MEM_USAGE_SLOTS;
     int zeroidx = (i+1) % CLIENTS_PEAK_MEM_USAGE_SLOTS;
 
@@ -1652,6 +1654,8 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
  */
 #define CLIENTS_CRON_MIN_ITERATIONS 5
 void clientsCron(void) {
+    //尝试在1秒钟内处理完所有的客户端,每次处理的为客户端数量/server.hz，如果客户端超过5个，每次最少处理5个。
+    //注意这里处理的不是客户端请求，而是客户端，例如关闭超时客户端，处理阻塞的客户端等。
     /* Try to process at least numclients/server.hz of clients
      * per call. Since normally (if there are no big latency events) this
      * function is called server.hz times per second, in the average case we
@@ -1670,7 +1674,7 @@ void clientsCron(void) {
     while(listLength(server.clients) && iterations--) {
         client *c;
         listNode *head;
-
+         //也就是说每次都是从尾部开始处理，并且将尾变成头
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
@@ -1707,6 +1711,7 @@ void databasesCron(void) {
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
+    // 这里的rehashing是针对的db对应的字典，不是应用使用的各个库内的字典。
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
@@ -1854,6 +1859,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
+     //如果设置了server.watchdog_period(默认为0)，则启动一个定时器。定时器会定时发送SIGALRM信号，处理该信号的为watchdogSignalHandler，该功能主要用于调试。
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
 
     /* Update the time cache. */
@@ -1862,18 +1868,21 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     server.hz = server.config_hz;
     /* Adapt the server.hz value to the number of configured clients. If we have
      * many clients, we want to call serverCron() with an higher frequency. */
+    //默认开启
     if (server.dynamic_hz) {
+        //每次调用最多处理200个客户端，所以如果客户端很多，那么需要增加调用频率
         while (listLength(server.clients) / server.hz >
                MAX_CLIENTS_PER_CLOCK_TICK)
         {
             server.hz *= 2;
+            // server.hz最大为500
             if (server.hz > CONFIG_MAX_HZ) {
                 server.hz = CONFIG_MAX_HZ;
                 break;
             }
         }
     }
-
+    //每100ms记录一下瞬时统计状态，每秒钟执行的命令数，每秒I/O字节数
     run_with_period(100) {
         trackInstantaneousMetric(STATS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT,
@@ -1929,6 +1938,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
+    // 在周期调用中优雅停机
     if (server.shutdown_asap) {
         if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) exit(0);
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
@@ -2328,11 +2338,14 @@ void createSharedObjects(void) {
 
 void initServerConfig(void) {
     int j;
-
+    //为了减少time()调用，缓存时间信息。
     updateCachedTime(1);
+    //设置runid，随机串，每次启动都不一样，可以用来判断连接的redis实例是否是同一个或者是否重启了。
     getRandomHexChars(server.runid,CONFIG_RUN_ID_SIZE);
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
+    //设置replid，随机串
     changeReplicationId();
+    //清除replid2
     clearReplicationId2();
     server.hz = CONFIG_DEFAULT_HZ; /* Initialize it ASAP, even if it may get
                                       updated later after loading the config.
@@ -2802,12 +2815,17 @@ void resetServerStats(void) {
 
 void initServer(void) {
     int j;
-
+     // 忽略SIGHUP，SIGHUP和会话及控制终端有关
     signal(SIGHUP, SIG_IGN);
+    // 忽略SIGPIPE，SIGPIPE和网络写失败有关
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
     if (server.syslog_enabled) {
+        // 设置syslog参数
+        //LOG_PID 每条日志信息中都包括进程号
+        // LOG_NDELAY 立即打开与系统日志的连接（通常情况下，只有在产生第一条日志信息的情况下才会打开与日志系统的连接）
+        // LOG_NOWAIT 在记录日志信息时，不等待可能的子进程的创建
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
     }
@@ -2840,9 +2858,11 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed to configure TLS. Check logs for more info.");
         exit(1);
     }
-
+    // 创建一些共享对象以减少调用，如一些常见错误提示
     createSharedObjects();
+    // 调整文件句柄数限制，这要求要么系统管理员设置够了足够的句柄数，或者redis是由有CAP_SYS_RESOURCE能力的用户启动的.
     adjustOpenFilesLimit();
+    // 创建eventLoop, 这是处理网络请求的主结构，包括了epoll实例，epoll_event数组等。
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
@@ -2850,8 +2870,10 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
+    //分配db空间（默认16个）
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
+    // 创建监听socket
     /* Open the TCP listening socket for the user commands. */
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == C_ERR)
@@ -2860,7 +2882,7 @@ void initServer(void) {
         listenToPort(server.tls_port,server.tlsfd,&server.tlsfd_count) == C_ERR)
         exit(1);
 
-    /* Open the listening Unix domain socket. */
+    /* Open the listening Unix domain socket. unix域只能在本机使用*/
     if (server.unixsocket != NULL) {
         unlink(server.unixsocket); /* don't care if this fails */
         server.sofd = anetUnixServer(server.neterr,server.unixsocket,
@@ -2937,9 +2959,13 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
 
+    // redis中的事件分为两类，一类是时间相关的事件，比如超时的客户端，回收过期的key等
+    // 时间事件是一个列表，新建时间事件会作为列表头。
+    // 另一类是文件相关的事件，比如网络请求
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
+    // 初始过期时间为1ms，运行后，每次的过期时间会调整为1000/server.hz,也就是说按照server.hz的频率执行。    
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
@@ -2947,6 +2973,8 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    //每个监听socket对应一个文件事件列表。这里已经开始监听处于监听状态的socket。如果有连接过来,那么这些socket上会触发读事件。
+    // 但是还没有调用epoll_wait,等网络事件主循环开启后，如果有连接过来，那么就会调用acceptTcpHandler。
     for (j = 0; j < server.ipfd_count; j++) {
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
             acceptTcpHandler,NULL) == AE_ERR)
@@ -2978,6 +3006,7 @@ void initServer(void) {
 
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
+    //beforeSleep做了很多事情，比如快速清理一些过期key，向从库发送ack，刷新write缓冲，更新集群状态，处理集群failover等。
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
@@ -3015,13 +3044,18 @@ void initServer(void) {
  * Thread Local Storage initialization collides with dlopen call.
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
+    //初始化后台执行系统
+    //启动3个线程，线程id存到bio_threads中，每个线程对应处理一种不同类型的任务，这三种类型分别是BIO_CLOSE_FILE，BIO_AOF_FSYNC，BIO_LAZY_FREE。
+    //任务是存放在list *bio_jobs[BIO_NUM_OPS]中，线程的运行函数为bioProcessBackgroundJobs
     bioInit();
+    // 初始化线程化IO，server.io_threads_num默认为1，表明不开启线程化IO。 如果开启的话，会创建server.io_threads_num个线程，线程执行的函数为IOThreadMain。
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
 }
 
-/* Parse the flags string description 'strflags' and set them to the
+/* 将字符串形式的命令标记，转换成比特位代表的标记。
+ * Parse the flags string description 'strflags' and set them to the
  * command 'c'. If the flags are all valid C_OK is returned, otherwise
  * C_ERR is returned (yet the recognized flags are set in the command). */
 int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
@@ -4748,7 +4782,7 @@ void createPidFile(void) {
 
 void daemonize(void) {
     int fd;
-
+    // 这是创建后台进程的常见方式
     if (fork() != 0) exit(0); /* parent exits */
     setsid(); /* create a new session */
 
@@ -4866,9 +4900,12 @@ void setupSignalHandlers(void) {
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
     act.sa_handler = sigShutdownHandler;
+    // SIGTERM是调用kill命令时不带参数的默认信号。只发给当前进程，子进程会由init进程接收。
     sigaction(SIGTERM, &act, NULL);
+    // SIGINT由CTRL+C产生，信号会发送给进程树（当前进程及其后代进程）。SIGINT只能结束前台进程。
     sigaction(SIGINT, &act, NULL);
 
+    // sigsegvHandler里面包含了对ucontext的处理。可以获取上下文信息。
 #ifdef HAVE_BACKTRACE
     sigemptyset(&act.sa_mask);
     act.sa_flags = SA_NODEFER | SA_RESETHAND | SA_SIGINFO;
@@ -5098,51 +5135,35 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
 
-#ifdef REDIS_TEST
-    if (argc == 3 && !strcasecmp(argv[1], "test")) {
-        if (!strcasecmp(argv[2], "ziplist")) {
-            return ziplistTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "quicklist")) {
-            quicklistTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "intset")) {
-            return intsetTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "zipmap")) {
-            return zipmapTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "sha1test")) {
-            return sha1Test(argc, argv);
-        } else if (!strcasecmp(argv[2], "util")) {
-            return utilTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "endianconv")) {
-            return endianconvTest(argc, argv);
-        } else if (!strcasecmp(argv[2], "crc64")) {
-            return crc64Test(argc, argv);
-        } else if (!strcasecmp(argv[2], "zmalloc")) {
-            return zmalloc_test(argc, argv);
-        }
-
-        return -1; /* test not found */
-    }
-#endif
-
     /* We need to initialize our libraries, and the server configuration. */
-#ifdef INIT_SETPROCTITLE_REPLACEMENT
-    spt_init(argc, argv);
-#endif
+    
+    //将argv和envp重新分配内存，为后面修改进程名做准备。
+    spt_init(argc, argv); 
+    // 使用系统默认字符排序规则，strcoll比较字符串会考虑LC_COLLATE。
     setlocale(LC_COLLATE,"");
-    tzset(); /* Populates 'timezone' global. */
+    tzset(); /* Populates 'timezone' global. 使用TZ环境变量(优先)或者系统设置*/
+    //设置oom处理函数。打印日志后，退出程序.注意这里不是处理系统OOM，而是说内存分配器分配内存失败后的处理。
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
+    // 设置rand使用的伪随机数种子
     srand(time(NULL)^getpid());
+    // 获取当前时间，从epoch以来的秒数和微妙数
     gettimeofday(&tv,NULL);
+    // 初始化crc64查找表
     crc64_init();
-
+    // 设置dict_hash_function_seed,用随机串作为种子应该是为了安全
     uint8_t hashseed[16];
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    // 检查是否是sentinel模式
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    // 初始化服务配置，都使用默认值。
     initServerConfig();
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
+    // 初始化模块系统，导出核心API，创建pipe，定时器rax，锁定mutex等。
     moduleInitModulesSystem();
+
+    // 初始化tls，在make BUILD_TLS=yes的情况下才会生效，请参考https://redis.io/topics/encryption
     tlsInit();
 
     /* Store the executable path and arguments in a safe place in order
@@ -5163,6 +5184,7 @@ int main(int argc, char **argv) {
     /* Check if we need to start in redis-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
+    //也就是说redis-server,redis-sentinel、redis-check-rdb、redis-check-aof都是使用同一个程序只是通过不同的名字来区分功能。检查完后程序就退出了。
     if (strstr(argv[0],"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(argv[0],"redis-check-aof") != NULL)
@@ -5204,6 +5226,7 @@ int main(int argc, char **argv) {
          * configuration file. For instance --port 6380 will generate the
          * string "port 6380\n" to be parsed after the actual file name
          * is parsed, if any. */
+        // 也就是说选项解析后的格式为optiona arg1 \n optionb arg1
         while(j != argc) {
             if (argv[j][0] == '-' && argv[j][1] == '-') {
                 /* Option name */
@@ -5222,6 +5245,7 @@ int main(int argc, char **argv) {
             }
             j++;
         }
+        //也就是说sentinel模式，除了用配置文件来修改配置参数，同样要用配置文件来存储状态。
         if (server.sentinel_mode && configfile && *configfile == '-') {
             serverLog(LL_WARNING,
                 "Sentinel config from STDIN not allowed.");
@@ -5256,19 +5280,24 @@ int main(int argc, char **argv) {
     readOOMScoreAdj();
     initServer();
     if (background || server.pidfile) createPidFile();
+    //进程名是argv[0],再加上绑定的第一个地址，如果没有则为*，然后加上端口号。后面如果是cluster模式，加上[cluster];如果是sentinel模式，加上[sentinel].
+    //这里是主进程名，不同的子进程比如处理RDB，AOF文件的子进程会有单独的名称。
     redisSetProcTitle(argv[0]);
     redisAsciiArt();
+    //在linux下/proc/sys/net/core/somaxconn中有一个上限限制，默认128，比redis的默认设置511要小，如果是这种情况，则打印日志。
     checkTcpBacklogSettings();
 
     if (!server.sentinel_mode) {
         /* Things not needed when running in Sentinel mode. */
         serverLog(LL_WARNING,"Server initialized");
     #ifdef __linux__
+        //检查linux的overcommit_memory和transparent_hugepage设置，如果有问题，则打印日志。 
         linuxMemoryWarnings();
     #endif
         moduleLoadFromQueue();
         ACLLoadUsersAtStartup();
         InitServerLast();
+        //将aof或者rdb文件加载到内存中
         loadDataFromDisk();
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
@@ -5306,7 +5335,7 @@ int main(int argc, char **argv) {
 
     redisSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
-
+    // 主循环
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
     return 0;

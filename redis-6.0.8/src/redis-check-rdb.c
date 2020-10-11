@@ -166,14 +166,19 @@ void rdbCheckSetupSignals(void) {
     sigemptyset(&act.sa_mask);
     act.sa_flags = SA_NODEFER | SA_RESETHAND | SA_SIGINFO;
     act.sa_sigaction = rdbCheckHandleCrash;
+    // 以下信号默认动作都是core，改为打印日志后退出。
+    // SIGSEGV Invalid memory reference,默认动作core
     sigaction(SIGSEGV, &act, NULL);
+    // SIGBUS  Bus error (bad memory access),默认动作core
     sigaction(SIGBUS, &act, NULL);
+    //SIGFPE Floating-point exception,默认动作core
     sigaction(SIGFPE, &act, NULL);
+    // SIGILL  Illegal Instruction,默认动作core
     sigaction(SIGILL, &act, NULL);
 }
 
 /* Check the specified RDB file. Return 0 if the RDB looks sane, otherwise
- * 1 is returned.
+ * 1 is returned.该函数只检查文件是否合法，并不实际加载数据。
  * The file is specified as a filename in 'rdbfilename' if 'fp' is not NULL,
  * otherwise the already open file 'fp' is checked. */
 int redis_check_rdb(char *rdbfilename, FILE *fp) {
@@ -185,10 +190,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
 
     int closefile = (fp == NULL);
     if (fp == NULL && (fp = fopen(rdbfilename,"r")) == NULL) return 1;
-
+    // 初始化rio使用文件fp作为后端设备
     rioInitWithFile(&rdb,fp);
     rdbstate.rio = &rdb;
     rdb.update_cksum = rdbLoadProgressCallback;
+    //也就是说rdb文件开始需要是REDIS字符串+一个整数的版本号，注意这里不涉及到大小端问题，因为存储的是整数的字符串形式。
     if (rioRead(&rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf,"REDIS",5) != 0) {
@@ -202,7 +208,9 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     }
 
     expiretime = -1;
+    // 标记开始loading,server.loading会设置为1.注意有一些函数会判断server.loading来进行不同的处理。
     startLoadingFile(fp, rdbfilename, RDBFLAGS_NONE);
+    // 下面是实际的检查过程，所有的key和value都会实际构造，但是并不会加载到系统中，构造后直接就释放了。我们可以看到都哪些数据会持久化及是如何持久化的。
     while(1) {
         robj *key, *val;
 
@@ -211,6 +219,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         if ((type = rdbLoadType(&rdb)) == -1) goto eoferr;
 
         /* Handle special types. */
+        // 老版的使用RDB_OPCODE_EXPIRETIME，注意老版未处理大小端。
+        // 新版的使用RDB_OPCODE_EXPIRETIME_MS，新版Redis5对新版的RDB（版本9）做了大小端兼容，实际存储是按照小端存储，在大端读取时做转换。
+        // X86为小端序。 不过实际上如果不是在大小端不同的机器之间拷贝rdb文件，那么都不会有问题。
+
+        // 注意在条件判断中读取完直接continue的，都是一些特殊操作；/
+        // 没有continue并且通过了rdbIsObjectType()判断的才是数据类型。
         if (type == RDB_OPCODE_EXPIRETIME) {
             rdbstate.doing = RDB_CHECK_DOING_READ_EXPIRE;
             /* EXPIRETIME: load an expire associated with the next key
@@ -279,9 +293,10 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             }
             rdbstate.key_type = type;
         }
-
+        // 下面的是数据。在检查过程中所有键和值都会实际构造，只是在构造完后就释放了。
         /* Read key */
         rdbstate.doing = RDB_CHECK_DOING_READ_KEY;
+        // key都是未编码的str对象
         if ((key = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
         rdbstate.key = key;
         rdbstate.keys++;
@@ -293,6 +308,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
         rdbstate.key = NULL;
+        // 获取完数据后要释放掉。
         decrRefCount(key);
         decrRefCount(val);
         rdbstate.key_type = -1;
@@ -338,7 +354,7 @@ err:
  * standalone executable, or called with a non NULL 'fp' argument if we
  * already have an open file to check. This happens when the function
  * is used to check an RDB preamble inside an AOF file.
- *
+ * 当作为独立程序调用时，程序会在该函数执行完后直接退出。
  * When called with fp = NULL, the function never returns, but exits with the
  * status code according to success (RDB is sane) or error (RDB is corrupted).
  * Otherwise if called with a non NULL fp, the function returns C_OK or
@@ -351,6 +367,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from
      * an already initialized Redis instance, check if we really need to. */
+    // shared.integers是10000以内的共享的整数对象数组。
     if (shared.integers[0] == NULL)
         createSharedObjects();
     server.loading_process_events_interval_bytes = 0;

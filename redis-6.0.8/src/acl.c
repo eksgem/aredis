@@ -929,6 +929,7 @@ char *ACLSetUserStringError(void) {
 /* Initialize the default user, that will always exist for all the process
  * lifetime. */
 void ACLInitDefaultUser(void) {
+    //添加default用户，默认运行执行所有命令，可以访问所有key，激活，并且不需要密码
     DefaultUser = ACLCreateUser("default",7);
     ACLSetUser(DefaultUser,"+@all",-1);
     ACLSetUser(DefaultUser,"~*",-1);

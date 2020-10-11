@@ -88,16 +88,20 @@ void linkClient(client *c) {
 
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
-
+    // NULL代表了一个非连接的客户端。
     /* passing NULL as conn it is possible to create a non connected client.
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
     if (conn) {
+        //设置NON_BLOCKING标记
         connNonBlock(conn);
+        //关闭Nagle算法
         connEnableTcpNoDelay(conn);
+        //开启SO_KEEPALIVE并设置相关选项,TCP层面设置
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
+        // 监控客户端的连接可读状态，也就是说如果客户端发送命令过来，这里可以监控到
         connSetReadHandler(conn, readQueryFromClient);
         connSetPrivateData(conn, c);
     }
@@ -1321,8 +1325,10 @@ int writeToClient(client *c, int handler_installed) {
     clientReplyBlock *o;
 
     while(clientHasPendingReplies(c)) {
+        //如果是使用buf，则全部发送
         if (c->bufpos > 0) {
             nwritten = connWrite(c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
+            //如果出错直接跳出循环，这里的write操作是非阻塞的。
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1371,6 +1377,7 @@ int writeToClient(client *c, int handler_installed) {
          * Moreover, we also send as much as possible if the client is
          * a slave or a monitor (otherwise, on high-speed traffic, the
          * replication/output buffer will grow indefinitely) */
+         //除非超过了最大内存，一次最多写64K数据。
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory) &&
@@ -1414,6 +1421,7 @@ int writeToClient(client *c, int handler_installed) {
 /* Write event handler. Just send data to the client. */
 void sendReplyToClient(connection *conn) {
     client *c = connGetPrivateData(conn);
+    //由WRITABLE事件触发，所以handler_installed为1.
     writeToClient(c,1);
 }
 
@@ -1437,6 +1445,7 @@ int handleClientsWithPendingWrites(void) {
         if (c->flags & CLIENT_PROTECTED) continue;
 
         /* Try to write buffers to the client socket. */
+         //这里调用handler_installed为0，因为不是由WRITABLE事件触发的。
         if (writeToClient(c,0) == C_ERR) continue;
 
         /* If after the synchronous writes above we still have data to
@@ -1453,6 +1462,8 @@ int handleClientsWithPendingWrites(void) {
             {
                 ae_barrier = 1;
             }
+            // 增加一个可写事件监控，只在这种特殊情况下需要增加这种可写事件，因为大多数情况下，都是可写的。
+            // 在水平触发的情况下，会出现大量无用的可写事件
             if (connSetWriteHandlerWithBarrier(c->conn, sendReplyToClient, ae_barrier) == C_ERR) {
                 freeClientAsync(c);
             }
@@ -1923,6 +1934,7 @@ void processInputBuffer(client *c) {
     }
 }
 
+// 这里是处理请求的地方
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     int nread, readlen;
@@ -1951,7 +1963,7 @@ void readQueryFromClient(connection *conn) {
          * for example once we resume a blocked client after CLIENT PAUSE. */
         if (remaining > 0 && remaining < readlen) readlen = remaining;
     }
-
+    // c->querybuf最大值为1G。
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
@@ -1993,6 +2005,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
+    // 读取了数据后，尝试处理
      processInputBuffer(c);
 }
 

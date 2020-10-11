@@ -480,6 +480,7 @@ void initSentinel(void) {
     /* Remove usual Redis commands from the command table, then just add
      * the SENTINEL command. */
     dictEmpty(server.commands,NULL);
+    // sizeof是编译时计算的。
     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
         int retval;
         struct redisCommand *cmd = sentinelcmds+j;
