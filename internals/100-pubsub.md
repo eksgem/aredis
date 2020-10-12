@@ -14,6 +14,16 @@ https://redis.io/topics/notifications
 - subscribe 订阅某些channel
 - psubscribe 订阅某些模式的channel，模式是使用通配符（?,*）匹配。
 
+### redis记录subscribe/psubscribe的数据结构
+
+publish信息不需要记录，可以随意发布。  
+subscribe主要涉及到以下结构：
+- server.pubsub_channels，订阅的channel。结构为一个字典，key为channel，值为一个clients的列表。发布的时候，直接通过channel查找到订阅的客户端列表，然后挨个发送通知。
+- pubsub_patterns_dict，订阅的模式。结构为一个字段，key为订阅的模式，值为一个clients的列表。
+发布的时候，需要遍历字典，如果模式匹配，则挨个给相应的客户端发送通知。从这里看，需要遍历所有的模式，所以模式如果过多的话，效率会较差。
+- client上的pubsub_channels，结构为一个字段，key为channel，值为null。client上的pubsub_patterns，结果为一个列表，元素为pattern。  
+client上的这两个字段，一是可以防止重复订阅，二是可以用来判断client是否处于订阅的上下文中。
+
 ### 注意事项
 
 1. 消息发布是不可靠的，也就是说如果没有订阅者，则直接就丢弃了。另外，如果redis服务重启连订阅信息也会丢弃。  
@@ -29,6 +39,5 @@ https://redis.io/topics/notifications
 2. 集群版redis
 构造一个JedisPubSub对象，里面是一些事件回调函数。然后通过JedisCluster.subscribe()方法来进行订阅。实际是随机选择了一个节点进行了subscribe。根据上面的说明，对于普通事件是没问题的，但是无法处理键空间/键事件发布。
 
-另外，注意Jedis接口只有subscribe和psubscribe，unsubscribe和punsubscribe都要通过JedisPubSub进行。对于集群来说，这种方式是必要的，因为集群每次是随机选择节点，而JedisPubSub实际是绑定了一个节点，所以可以精准的取消订阅。
-
+另外，注意Jedis接口只有subscribe和psubscribe，unsubscribe和punsubscribe都要通过JedisPubSub进行。对于集群来说，这种方式是必要的，因为集群每次是随机选择节点，而JedisPubSub实际是绑定了一个节点，所以可以精准的取消订阅。另外，除了第一次的subscribe，后续的subscribe也必须通过JedisPubSub进行。
 
